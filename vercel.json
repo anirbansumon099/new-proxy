@@ -7,9 +7,9 @@
     }
   ],
   "routes": [
-    { "src": "/tracks-v1a1/(.*)", "dest": "/router/playlist.js" },
-    { "src": "/track-v1a1/(.*)", "dest": "/router/playlist.js" },
-    {"src": "/tracks-v1a1/(.*)","dest":"/router/segment.js"}
+    { "src": "/tracks-v1a1/(.*)", "dest": "/routes/playlist.js" },
+    { "src": "/track-v1a1/(.*)", "dest": "/routes/playlist.js" },
+    {"src": "/tracks-v1a1/(.*)","dest":"/routes/segment.js"}
     
   ]
 }
