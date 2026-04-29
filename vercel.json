@@ -2,14 +2,11 @@
   "version": 2,
   "builds": [
     {
-      "src": "server.js",
+      "src": "app.js",
       "use": "@vercel/node"
     }
   ],
-  "routes": [
-    { "src": "/tracks-v1a1/(.*)", "dest": "/routes/playlist.js" },
-    { "src": "/track-v1a1/(.*)", "dest": "/routes/playlist.js" },
-    {"src": "/tracks-v1a1/(.*)","dest":"/routes/segment.js"}
-    
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/server.js" }
   ]
 }
