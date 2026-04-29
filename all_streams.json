@@ -4,8 +4,10 @@
 {
   "id":"willow",
   "stream":"http://27.124.71.27/Willow_Extra/index.m3u8"
-}
-
+},
+{
+  "id":"mytv",
+  "stream":"https://aureliumtv.vercel.app/Bijoy-Tv.m3u8"
 
 
     
