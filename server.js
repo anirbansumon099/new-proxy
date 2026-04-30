@@ -59,7 +59,7 @@ function curlRequest(url, headers) {
 // --- ৩. রাউটস ---
 
 
-app.get('/',require('routes/index));
+app.get('/',require('./routes/index));
 
 
 // (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
