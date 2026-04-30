@@ -58,6 +58,10 @@ function curlRequest(url, headers) {
 
 // --- ৩. রাউটস ---
 
+
+app.get('/',require('routes/index));
+
+
 // (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
 app.get("/:id/index.m3u8", async (req, res) => {
     const { id } = req.params;
