@@ -234,7 +234,7 @@ res.send(`<!DOCTYPE html>
 
     <div id="dev" class="tab active">
         <div class="card" style="text-align:center;">
-            <img src="https:" class="profile-img" alt="Anirban Sumon">
+            <img src="dev-logo.png" class="profile-img" alt="Anirban Sumon">
             <h2 style="font-size: 24px; margin-bottom: 5px;">Anirban Sumon</h2>
             <p style="color: var(--primary); font-weight: 600; margin-bottom: 15px; letter-spacing: 1px;">Full Stack Developer</p>
 
