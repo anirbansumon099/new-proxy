@@ -6,7 +6,7 @@ const path = require('path');
 const crypto = require("crypto");
 const { URL } = require("url");
 require("dotenv").config();
-
+const dashboardRouter = require("./routes/index"); // যদি ফাইলের নাম dashboard.js হয়
 const app = express();
 const STREAMS_FILE = path.join(__dirname, "all_streams.json");
 
@@ -58,8 +58,7 @@ function curlRequest(url, headers) {
 
 // --- ৩. রাউটস ---
 
-
-app.get('/',require('./routes/index));
+app.get('/',dashboardRouter);
 
 
 // (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
