@@ -1,26 +1,40 @@
 const express = require("express");
 const https = require("https");
 const http = require("http");
-const crypto = require("crypto");
 const fs = require('fs');
 const path = require('path');
+const crypto = require("crypto");
 const { URL } = require("url");
 require("dotenv").config();
 
 const app = express();
-app.use(express.json());
-
 const STREAMS_FILE = path.join(__dirname, "all_streams.json");
 
-// --- ১. সিকিউরিটি (Encryption/Decryption Logic) ---
-// আপনার আগের এনক্রিপশন সিস্টেমের মতই হেক্স এনকোডিং ব্যবহার করছি যা ডাইনামিক ইউআরএল হ্যান্ডেল করবে
-const encryptData = (text) => Buffer.from(text).toString('hex');
-const decryptData = (hex) => Buffer.from(hex, 'hex').toString();
+// --- ১. সিকিউরিটি (AES-256-CBC) ---
+const ENCRYPTION_KEY = Buffer.from(process.env.KEY || "0123456789abcdef0123456789abcdef", 'utf8'); 
+const IV_LENGTH = 16;
 
-// --- ২. হেল্পার ফাংশন ---
-function getBaseServer(channelId) {
+function encrypt(text) {
+    let iv = crypto.randomBytes(IV_LENGTH);
+    let cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decrypt(text) {
+    let textParts = text.split(':');
+    let iv = Buffer.from(textParts.shift(), 'hex');
+    let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+    let decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+}
+
+// --- ২. সোর্স ডাটা ফেচিং ফাংশন ---
+function getSourceUrl(channelId) {
     try {
-        if (!fs.existsSync(STREAMS_FILE)) return null;
         const data = JSON.parse(fs.readFileSync(STREAMS_FILE, "utf-8"));
         const channel = data.channels.find(c => c.id === channelId);
         return channel ? channel.stream : null;
@@ -29,10 +43,8 @@ function getBaseServer(channelId) {
 
 function curlRequest(url, headers) {
     return new Promise((resolve) => {
-        const urlObj = new URL(url);
-        const client = urlObj.protocol === "https:" ? https : http;
-        const options = { headers, rejectUnauthorized: false };
-
+        const client = url.startsWith("https") ? https : http;
+        const options = { headers, rejectUnauthorized: false, timeout: 20000 };
         const req = client.request(url, options, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return resolve(curlRequest(new URL(res.headers.location, url).href, headers));
@@ -44,99 +56,111 @@ function curlRequest(url, headers) {
     });
 }
 
-// --- ৩. রাউটস (Routes) ---
+// --- ৩. রাউটস ---
 
-// (ক) ইনডেক্স পেজ
-app.get("/", (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>OTT - KING | Secure Proxy</title>
-        <style>
-            body { font-family: sans-serif; background: #080808; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .card { text-align: center; padding: 40px; background: #141414; border-radius: 20px; border: 1px solid #333; box-shadow: 0 0 20px rgba(229,9,20,0.2); }
-            h1 { color: #e50914; margin: 0; font-size: 2.5rem; }
-            .status { color: #28a745; font-weight: bold; margin-top: 15px; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>OTT - KING</h1>
-            <p>Premium IPTV Proxy System v2.0</p>
-            <div class="status">● SERVER ONLINE</div>
-            <p style="font-size: 10px; color: #555; margin-top: 20px;">© 2026 AnirbanSumon | Secure AES-128 Proxy</p>
-        </div>
-    </body>
-    </html>`);
-});
-
-// (খ) প্লেলিস্ট প্রক্সি (AES-128 সাপোর্ট সহ)
-app.get("/tracks-v1a1/:id/:file.m3u8", async (req, res) => {
+// (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
+app.get("/:id/index.m3u8", async (req, res) => {
     const { id } = req.params;
-    const baseServer = getBaseServer(id);
-    if (!baseServer) return res.status(404).send("#ID NOT FOUND");
+    const sourceUrl = getSourceUrl(id);
+    if (!sourceUrl) return res.status(404).send("Invalid Channel");
 
-    const baseUrl = baseServer.substring(0, baseServer.lastIndexOf("/") + 1);
-    const response = await curlRequest(baseServer, { "User-Agent": "Mozilla/5.0" });
+    const sourceRes = await curlRequest(sourceUrl, { "User-Agent": "Mozilla/5.0" });
+    if (!sourceRes) return res.status(500).send("Offline");
 
-    if (!response || response.statusCode !== 200) return res.status(500).send("#SOURCE ERROR");
+    const contentType = (sourceRes.headers['content-type'] || "").toLowerCase();
 
+    // কন্টেন্ট চেক: যদি এটি প্লেলিস্ট না হয় (যেমন ডাইরেক্ট অক্টেট স্ট্রিম)
+    if (!contentType.includes("mpegurl") && !contentType.includes("application/x-mpegurl")) {
+        return res.redirect(302, `/${id}/index.ts`);
+    }
+
+    // প্লেলিস্ট প্রসেসিং
     let data = "";
-    response.on("data", chunk => data += chunk);
-    response.on("end", () => {
+    sourceRes.on("data", chunk => data += chunk);
+    sourceRes.on("end", () => {
         let output = "";
-        const lines = data.split("\n");
-
-        lines.forEach(line => {
+        data.split("\n").forEach(line => {
             line = line.trim();
-            if (line.startsWith("#EXT-X-KEY")) {
-                const keyMatch = line.match(/URI=["']?(.*?)["']?($|,)/);
-                if (keyMatch) {
-                    const absKey = new URL(keyMatch[1], baseUrl).href;
-                    line = line.replace(keyMatch[1], `/tracks-v1a1/${id}/_key_${encryptData(absKey)}.key`);
+            if (!line) return;
+            if (line.startsWith("#")) {
+                if (line.includes("URI=")) {
+                    const match = line.match(/URI=["']?(.*?)["']?($|,)/);
+                    if (match) {
+                        const absKey = new URL(match[1], sourceUrl).href;
+                        line = line.replace(match[1], `/${id}/${encrypt(absKey)}.key`);
+                    }
                 }
                 output += line + "\n";
-            } else if (line.startsWith("#") || !line) {
-                output += line + "\n";
             } else {
-                const absSeg = new URL(line, baseUrl).href;
-                output += `/tracks-v1a1/${id}/_ts_${encryptData(absSeg)}.ts\n`;
+                const absUrl = new URL(line, sourceUrl).href;
+                // আমরা এখানে কন্টেন্ট না দেখে এক্সটেনশন দিচ্ছি প্রক্সি রাউটিং এর সুবিধার জন্য
+                output += `/${id}/${encrypt(absUrl)}.chunk\n`;
             }
         });
-
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-        res.setHeader("Access-Control-Allow-Origin", "*");
         res.send(output);
     });
 });
 
-// (গ) সেগমেন্ট ও কী প্রক্সি (ডিক্রিপশন সহ)
-app.get("/tracks-v1a1/:id/:file", async (req, res) => {
-    const { file } = req.params;
-    let targetUrl = "";
+// (খ) ডাইরেক্ট টিএস রাউট: /:id/index.ts (Continuous Stream)
+app.get("/:id/index.ts", async (req, res) => {
+    const { id } = req.params;
+    const sourceUrl = getSourceUrl(id);
+    if (!sourceUrl) return res.status(404).end();
 
-    try {
-        if (file.startsWith("_ts_")) {
-            targetUrl = decryptData(file.replace("_ts_", "").replace(".ts", ""));
-        } else if (file.startsWith("_key_")) {
-            targetUrl = decryptData(file.replace("_key_", "").replace(".key", ""));
-        } else { return res.status(404).end(); }
+    const sourceRes = await curlRequest(sourceUrl, { "User-Agent": "Mozilla/5.0" });
+    if (!sourceRes) return res.status(500).end();
 
-        const stream = await curlRequest(targetUrl, { 
-            "User-Agent": "Mozilla/5.0",
-            "Referer": new URL(targetUrl).origin 
-        });
-
-        if (!stream) return res.status(500).end();
-
-        res.setHeader("Content-Type", file.endsWith(".key") ? "application/octet-stream" : "video/mp2t");
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        stream.pipe(res);
-    } catch (e) { res.status(500).end(); }
+    res.setHeader("Content-Type", "video/mp2t");
+    sourceRes.pipe(res);
 });
 
-// সার্ভার স্টার্ট
+// (গ) ইন্টেলিজেন্ট চাস্ক হ্যান্ডলার: ফাইল যাই হোক, কন্টেন্ট দেখে রেসপন্স করবে
+app.get("/:id/:encryptedPath", async (req, res) => {
+    const { id, encryptedPath } = req.params;
+    let targetUrl;
+
+    try {
+        const hash = encryptedPath.split('.')[0];
+        targetUrl = decrypt(hash);
+    } catch (e) { return res.status(400).end(); }
+
+    const sourceRes = await curlRequest(targetUrl, { 
+        "User-Agent": "Mozilla/5.0",
+        "Referer": new URL(targetUrl).origin 
+    });
+
+    if (!sourceRes) return res.status(500).end();
+
+    const contentType = (sourceRes.headers['content-type'] || "").toLowerCase();
+
+    // ১. যদি এটি মেনিফেস্ট বা প্লেলিস্ট হয় (ভিতরের ডাটা চেক)
+    if (contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl")) {
+        let data = "";
+        sourceRes.on("data", chunk => data += chunk);
+        sourceRes.on("end", () => {
+            let output = "";
+            data.split("\n").forEach(line => {
+                line = line.trim();
+                if (!line) return;
+                if (line.startsWith("#")) {
+                    output += line + "\n";
+                } else {
+                    const absUrl = new URL(line, targetUrl).href;
+                    output += `/${id}/${encrypt(absUrl)}.chunk\n`;
+                }
+            });
+            res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+            res.send(output);
+        });
+    } 
+    // ২. যদি এটি ভিডিও সেগমেন্ট বা অক্টেট স্ট্রিম হয়
+    else {
+        res.setHeader("Content-Type", contentType || "video/mp2t");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        sourceRes.pipe(res);
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`[OTTKing] Proxy active on port ${PORT}`));
+app.listen(PORT, () => console.log(`OTT-KING Intelligent Proxy running on ${PORT}`));
