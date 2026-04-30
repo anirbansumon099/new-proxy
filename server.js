@@ -6,7 +6,7 @@ const path = require('path');
 const crypto = require("crypto");
 const { URL } = require("url");
 require("dotenv").config();
-const dashboardRouter = require("./routes/index"); // যদি ফাইলের নাম dashboard.js হয়
+const dashboardRouter = require("./routes/index");
 const app = express();
 const STREAMS_FILE = path.join(__dirname, "all_streams.json");
 
@@ -32,7 +32,20 @@ function decrypt(text) {
     return decrypted.toString();
 }
 
-// --- ২. সোর্স ডাটা ফেচিং ফাংশন ---
+// --- ২. প্লেলিস্ট টাইপ ডিটেকশন ---
+function isM3U8Line(line) {
+    return line && !line.startsWith("#");
+}
+
+function isMasterPlaylist(data) {
+    return data.includes("#EXT-X-STREAM-INF") || data.includes("#EXT-X-MEDIA");
+}
+
+function isMediaPlaylist(data) {
+    return data.includes("#EXT-X-TARGETDURATION") || data.includes("#EXTINF");
+}
+
+// --- ৩. সোর্স ডাটা ফেচিং ফাংশন ---
 function getSourceUrl(channelId) {
     try {
         const data = JSON.parse(fs.readFileSync(STREAMS_FILE, "utf-8"));
@@ -56,12 +69,55 @@ function curlRequest(url, headers) {
     });
 }
 
-// --- ৩. রাউটস ---
+// --- ৪. প্লেলিস্ট প্রসেসিং ফাংশন ---
+function processPlaylist(data, sourceUrl, id, playlistType) {
+    let output = "";
+    const lines = data.split("\n");
 
-app.get('/',dashboardRouter);
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+        
+        if (!line) {
+            output += "\n";
+            continue;
+        }
 
+        // মেটাডেটা লাইন (#দিয়ে শুরু)
+        if (line.startsWith("#")) {
+            // URI= ট্যাগ প্রসেস করুন (এনক্রিপশন কী এর জন্য)
+            if (line.includes("URI=")) {
+                const match = line.match(/URI=["']?(.*?)["']?($|,)/);
+                if (match) {
+                    const absKey = new URL(match[1], sourceUrl).href;
+                    line = line.replace(match[1], `/${id}/${encrypt(absKey)}.key`);
+                }
+            }
+            output += line + "\n";
+        } 
+        // ইউআরএল লাইন (সেগমেন্ট বা ভ্যারিয়েন্ট প্লেলিস্ট)
+        else {
+            // সম্পূর্ণ ইউআরএল তৈরি করুন
+            const absUrl = new URL(line, sourceUrl).href;
+            
+            // মাস্টার প্লেলিস্ট হলে ভ্যারিয়েন্ট প্লেলিস্ট লিংক এনক্রিপ্ট করুন
+            if (playlistType === "master") {
+                output += `/${id}/${encrypt(absUrl)}.m3u8\n`;
+            } 
+            // মিডিয়া প্লেলিস্ট হলে সেগমেন্ট লিংক এনক্রিপ্ট করুন
+            else {
+                output += `/${id}/${encrypt(absUrl)}.ts\n`;
+            }
+        }
+    }
 
-// (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
+    return output;
+}
+
+// --- ৫. রাউটস ---
+
+app.get('/', dashboardRouter);
+
+// (ক) মেইন এন্ট্রি পয়েন্ট: /:id/index.m3u8
 app.get("/:id/index.m3u8", async (req, res) => {
     const { id } = req.params;
     const sourceUrl = getSourceUrl(id);
@@ -72,7 +128,7 @@ app.get("/:id/index.m3u8", async (req, res) => {
 
     const contentType = (sourceRes.headers['content-type'] || "").toLowerCase();
 
-    // কন্টেন্ট চেক: যদি এটি প্লেলিস্ট না হয় (যেমন ডাইরেক্ট অক্টেট স্ট্রিম)
+    // কন্টেন্ট চেক: যদি এটি প্লেলিস্ট না হয় (যেমন ডাইরেক্ট অক্টেট স্ট্রিম)
     if (!contentType.includes("mpegurl") && !contentType.includes("application/x-mpegurl")) {
         return res.redirect(302, `/${id}/index.ts`);
     }
@@ -81,25 +137,15 @@ app.get("/:id/index.m3u8", async (req, res) => {
     let data = "";
     sourceRes.on("data", chunk => data += chunk);
     sourceRes.on("end", () => {
-        let output = "";
-        data.split("\n").forEach(line => {
-            line = line.trim();
-            if (!line) return;
-            if (line.startsWith("#")) {
-                if (line.includes("URI=")) {
-                    const match = line.match(/URI=["']?(.*?)["']?($|,)/);
-                    if (match) {
-                        const absKey = new URL(match[1], sourceUrl).href;
-                        line = line.replace(match[1], `/${id}/${encrypt(absKey)}.key`);
-                    }
-                }
-                output += line + "\n";
-            } else {
-                const absUrl = new URL(line, sourceUrl).href;
-                // আমরা এখানে কন্টেন্ট না দেখে এক্সটেনশন দিচ্ছি প্রক্সি রাউটিং এর সুবিধার জন্য
-                output += `/${id}/${encrypt(absUrl)}.ts\n`;
-            }
-        });
+        // প্লেলিস্ট টাইপ ডিটেক্ট করুন
+        let playlistType = "media"; // ডিফল্ট
+        if (isMasterPlaylist(data)) {
+            playlistType = "master";
+        } else if (isMediaPlaylist(data)) {
+            playlistType = "media";
+        }
+
+        const output = processPlaylist(data, sourceUrl, id, playlistType);
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
         res.send(output);
     });
@@ -118,7 +164,36 @@ app.get("/:id/index.ts", async (req, res) => {
     sourceRes.pipe(res);
 });
 
-// (গ) ইন্টেলিজেন্ট চাস্ক হ্যান্ডলার: ফাইল যাই হোক, কন্টেন্ট দেখে রেসপন্স করবে
+// (গ) ভ্যারিয়েন্ট প্লেলিস্ট হ্যান্ডলার: /:id/:encryptedPath.m3u8
+app.get("/:id/:encryptedPath.m3u8", async (req, res) => {
+    const { id, encryptedPath } = req.params;
+    let targetUrl;
+
+    try {
+        const hash = encryptedPath.split('.')[0];
+        targetUrl = decrypt(hash);
+    } catch (e) { 
+        return res.status(400).send("Invalid Encryption"); 
+    }
+
+    const sourceRes = await curlRequest(targetUrl, { 
+        "User-Agent": "Mozilla/5.0",
+        "Referer": new URL(targetUrl).origin 
+    });
+
+    if (!sourceRes) return res.status(500).end();
+
+    let data = "";
+    sourceRes.on("data", chunk => data += chunk);
+    sourceRes.on("end", () => {
+        // ভ্যারিয়েন্ট প্লেলিস্ট সবসময় মিডিয়া প্লেলিস্ট (সেগমেন্ট দিয়ে)
+        const output = processPlaylist(data, targetUrl, id, "media");
+        res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+        res.send(output);
+    });
+});
+
+// (ঘ) মাল্টি-পারপাস চাংক হ্যান্ডলার: /:id/:encryptedPath.ts
 app.get("/:id/:encryptedPath.ts", async (req, res) => {
     const { id, encryptedPath } = req.params;
     let targetUrl;
@@ -126,7 +201,9 @@ app.get("/:id/:encryptedPath.ts", async (req, res) => {
     try {
         const hash = encryptedPath.split('.')[0];
         targetUrl = decrypt(hash);
-    } catch (e) { return res.status(400).end(); }
+    } catch (e) { 
+        return res.status(400).end(); 
+    }
 
     const sourceRes = await curlRequest(targetUrl, { 
         "User-Agent": "Mozilla/5.0",
@@ -137,32 +214,46 @@ app.get("/:id/:encryptedPath.ts", async (req, res) => {
 
     const contentType = (sourceRes.headers['content-type'] || "").toLowerCase();
 
-    // ১. যদি এটি মেনিফেস্ট বা প্লেলিস্ট হয় (ভিতরের ডাটা চেক)
+    // ১. যদি এটি মেনিফেস্ট বা প্লেলিস্ট হয়
     if (contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl")) {
         let data = "";
         sourceRes.on("data", chunk => data += chunk);
         sourceRes.on("end", () => {
-            let output = "";
-            data.split("\n").forEach(line => {
-                line = line.trim();
-                if (!line) return;
-                if (line.startsWith("#")) {
-                    output += line + "\n";
-                } else {
-                    const absUrl = new URL(line, targetUrl).href;
-                    output += `/${id}/${encrypt(absUrl)}.chunk\n`;
-                }
-            });
+            const output = processPlaylist(data, targetUrl, id, "media");
             res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
             res.send(output);
         });
     } 
-    // ২. যদি এটি ভিডিও সেগমেন্ট বা অক্টেট স্ট্রিম হয়
+    // ২. যদি এটি ভিডিও সেগমেন্ট বা অক্টেট স্ট্রিম হয়
     else {
         res.setHeader("Content-Type", contentType || "video/mp2t");
         res.setHeader("Access-Control-Allow-Origin", "*");
         sourceRes.pipe(res);
     }
+});
+
+// (ঙ) এনক্রিপ্টেড কী হ্যান্ডলার: /:id/:encryptedPath.key
+app.get("/:id/:encryptedPath.key", async (req, res) => {
+    const { id, encryptedPath } = req.params;
+    let targetUrl;
+
+    try {
+        const hash = encryptedPath.split('.')[0];
+        targetUrl = decrypt(hash);
+    } catch (e) { 
+        return res.status(400).end(); 
+    }
+
+    const sourceRes = await curlRequest(targetUrl, { 
+        "User-Agent": "Mozilla/5.0",
+        "Referer": new URL(targetUrl).origin 
+    });
+
+    if (!sourceRes) return res.status(500).end();
+
+    res.setHeader("Content-Type", sourceRes.headers['content-type'] || "application/octet-stream");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    sourceRes.pipe(res);
 });
 
 const PORT = process.env.PORT || 3000;
