@@ -94,7 +94,7 @@ app.get("/:id/index.m3u8", async (req, res) => {
             } else {
                 const absUrl = new URL(line, sourceUrl).href;
                 // আমরা এখানে কন্টেন্ট না দেখে এক্সটেনশন দিচ্ছি প্রক্সি রাউটিং এর সুবিধার জন্য
-                output += `/${id}/${encrypt(absUrl)}.chunk\n`;
+                output += `/${id}/${encrypt(absUrl)}.ts\n`;
             }
         });
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
@@ -116,7 +116,7 @@ app.get("/:id/index.ts", async (req, res) => {
 });
 
 // (গ) ইন্টেলিজেন্ট চাস্ক হ্যান্ডলার: ফাইল যাই হোক, কন্টেন্ট দেখে রেসপন্স করবে
-app.get("/:id/:encryptedPath", async (req, res) => {
+app.get("/:id/:encryptedPath.ts", async (req, res) => {
     const { id, encryptedPath } = req.params;
     let targetUrl;
 
