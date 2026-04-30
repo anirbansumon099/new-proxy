@@ -253,9 +253,9 @@ res.send(`<!DOCTYPE html>
             </div>
 
             <div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px;">
-                <a href="#" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">GitHub</a>
-                <a href="#" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">Portfolio</a>
-                <a href="#" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">Contact</a>
+                <a href="https://github.com/anirbansumon099" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">GitHub</a>
+                <a href="https://github.com/anirbansumon099" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">Portfolio</a>
+                <a href="https://github.com/anirbansumon099" style="margin:0 15px; color:var(--accent-blue); text-decoration:none; font-size:14px; font-weight:500;">Contact</a>
             </div>
         </div>
     </div>
